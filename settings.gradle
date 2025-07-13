@@ -1,0 +1,19 @@
+pluginManagement {
+    repositories {
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+rootProject.name = 'order-simulator'
+
+include 'common'
+findProject('common')?.name = 'common'
+
+include 'etl'
+findProject('etl')?.name = 'etl'
+
+include 'handler'
+findProject('handler')?.name = 'handler'
+
+
