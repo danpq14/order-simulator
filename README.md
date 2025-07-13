@@ -1,14 +1,23 @@
 # Order Simulator
 
-A microservices-based order management system with event-driven architecture using Spring Boot, Kafka, and MySQL.
+A microservices-based order management system with event-driven architecture using Spring Boot, Kafka, and MySQL. The system provides secure REST APIs for order management with comprehensive error handling, retry mechanisms, and dead letter queue support.
 
 ## Architecture
 
 - **Common Library**: Shared library containing common DTOs, enums, exceptions, and constants used by both services
-- **Handler Service**: REST API service that manages orders and publishes events to Kafka
-- **ETL Service**: Event consumer service that processes order events and stores them in the database
+- **Handler Service**: Secure REST API service that manages orders and publishes events to Kafka
+- **ETL Service**: Event consumer service that processes order events and stores them in the database with retry and DLQ support
 - **MySQL**: Database for storing orders and events
-- **Kafka**: Message broker for event-driven communication
+- **Kafka**: Message broker for event-driven communication with dead letter queue support
+
+## Features
+
+- 🔐 **Security**: Basic authentication with hardcoded admin credentials
+- 🔄 **Event-Driven Architecture**: Asynchronous order processing via Kafka
+- 🛡️ **Error Handling**: Comprehensive error responses with proper HTTP status codes
+- 🔁 **Retry Mechanism**: Automatic retry with Dead Letter Queue for failed messages
+- 📊 **Monitoring**: Health checks and Kafka UI for system monitoring
+- 🐳 **Docker Support**: Full containerization with Docker Compose
 
 ## Quick Start with Docker Compose
 
@@ -45,20 +54,76 @@ A microservices-based order management system with event-driven architecture usi
 
 | Service | Port | Description |
 |---------|------|-------------|
-| Handler Service | 8080 | REST API for order management |
-| ETL Service | - | Internal Kafka consumer |
+| Handler Service | 8080 | Secure REST API for order management |
+| ETL Service | - | Internal Kafka consumer with DLQ support |
 | MySQL | 3306 | Database |
 | Kafka | 9092 | Message broker |
 | Kafka UI | 8081 | Kafka management interface |
 | Zookeeper | 2181 | Kafka coordination |
 
-### API Endpoints
+## API Security
 
-Once the services are running, you can access the Handler Service APIs:
+The Handler Service is secured with **HTTP Basic Authentication**. All endpoints (except `/login` and health checks) require authentication.
+
+### Default Credentials
+- **Username**: `admin`
+- **Password**: `admin`
+
+### Authentication Methods
+
+#### 1. Login API
+```bash
+curl -X POST http://localhost:8080/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "admin",
+    "password": "admin"
+  }'
+```
+
+**Response:**
+```json
+{
+  "message": "Login successful",
+  "username": "admin",
+  "success": true
+}
+```
+
+#### 2. Basic Authentication
+Include credentials in request headers for all protected endpoints:
+```bash
+curl -u admin:admin http://localhost:8080/orders
+```
+
+### Public Endpoints
+- `POST /login` - Authentication endpoint
+- `GET /actuator/health` - Health check endpoint
+
+### Protected Endpoints
+All other endpoints require authentication:
+- Order management APIs
+- Order simulation APIs
+
+## API Endpoints
+
+### Authentication
+
+#### Login
+```bash
+curl -X POST http://localhost:8080/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "admin",
+    "password": "admin"
+  }'
+```
+
+### Order Management (Requires Authentication)
 
 #### Create Order
 ```bash
-curl -X POST http://localhost:8080/orders \
+curl -u admin:admin -X POST http://localhost:8080/orders \
   -H "Content-Type: application/json" \
   -d '{
     "symbol": "VCB",
@@ -70,32 +135,120 @@ curl -X POST http://localhost:8080/orders \
 
 #### Get All Orders
 ```bash
-curl http://localhost:8080/orders
+curl -u admin:admin http://localhost:8080/orders
 ```
 
 #### Get Order by ID
 ```bash
-curl http://localhost:8080/orders/1
+curl -u admin:admin http://localhost:8080/orders/1
 ```
 
 #### Cancel Order
 ```bash
-curl -X POST http://localhost:8080/orders/1/cancel
+curl -u admin:admin -X POST http://localhost:8080/orders/1/cancel
 ```
 
 #### Simulate Order Execution (Admin)
 ```bash
-curl -X POST http://localhost:8080/orders/simulation-execution
+curl -u admin:admin -X POST http://localhost:8080/orders/simulation-execution
 ```
 
-### Monitoring
+## Testing with Postman
 
-- **Kafka UI**: http://localhost:8081 - Monitor Kafka topics and messages
-- **Health Checks**:
-  - Handler: http://localhost:8080/actuator/health
-  - ETL: http://localhost:8080/actuator/health (internal)
+For easier API testing, you can import our pre-configured Postman collection:
 
-### Database Access
+**Postman Collection**: [Order Simulator APIs](https://web.postman.co/workspace/My-Workspace~b992ba0a-628f-40f9-8da9-51f5f3d0c6ae/collection/39128812-7705dff2-4c70-4e2b-a649-d4be540016c8?action=share&source=copy-link&creator=39128812)
+
+The collection includes:
+- Pre-configured authentication (admin/admin)
+- All order management endpoints
+- Login API example
+- Error handling scenarios
+- Sample request bodies
+
+**How to use:**
+1. Click the collection link above
+2. Import to your Postman workspace
+3. Update the `baseUrl` variable if needed (default: `http://localhost:8080`)
+4. Start testing the APIs!
+
+## Error Handling
+
+The API provides comprehensive error handling with appropriate HTTP status codes:
+
+### HTTP Status Codes
+- **200 OK**: Successful requests
+- **400 Bad Request**: Invalid request data or order state
+- **401 Unauthorized**: Missing or invalid credentials
+- **404 Not Found**: Order not found or non-existent endpoint
+- **405 Method Not Allowed**: Unsupported HTTP method
+- **500 Internal Server Error**: Server-side errors
+
+### Error Response Format
+```json
+{
+  "status": 404,
+  "error": "Not Found",
+  "message": "Order not found with id: 999",
+  "timestamp": "2025-01-13T15:30:45.123Z"
+}
+```
+
+### Validation Errors
+```json
+{
+  "status": 400,
+  "error": "Validation Failed",
+  "message": "Request validation failed",
+  "validationErrors": {
+    "symbol": "must not be blank",
+    "quantity": "must be positive"
+  },
+  "timestamp": "2025-01-13T15:30:45.123Z"
+}
+```
+
+## Event Processing & Reliability
+
+### Event Flow
+1. **Order Creation**: Handler receives REST request → Creates order → Publishes `ORDER_CREATED` event
+2. **Order Cancellation**: Handler cancels order → Publishes `ORDER_CANCELLED` event
+3. **Order Execution**: Handler executes order → Publishes `ORDER_EXECUTED` event
+4. **Order Failure**: Handler fails order → Publishes `ORDER_FAILED` event
+5. **Event Processing**: ETL consumes events → Stores event history in database
+
+### Dead Letter Queue (DLQ) Support
+- **Automatic Retry**: Failed messages are retried up to 3 times
+- **DLQ Processing**: Messages exceeding retry limit are sent to `order-events-dlq` topic
+- **Error Monitoring**: DLQ consumer logs failed messages for analysis
+- **Manual Acknowledgment**: Prevents message loss during processing failures
+
+### Kafka Topics
+- `order-events`: Main topic for order events
+- `order-events-dlq`: Dead letter queue for failed messages
+
+## Monitoring
+
+### Health Checks
+- **Handler**: http://localhost:8080/actuator/health
+- **ETL**: Internal health monitoring via logs
+
+### Kafka Management
+- **Kafka UI**: http://localhost:8081 - Monitor topics, messages, and consumer groups
+
+### Useful Commands
+```bash
+# Check Kafka topics
+docker-compose exec kafka kafka-topics --list --bootstrap-server localhost:9092
+
+# View DLQ messages
+docker-compose exec kafka kafka-console-consumer --bootstrap-server localhost:9092 --topic order-events-dlq --from-beginning
+
+# Monitor ETL service logs
+docker-compose logs -f etl-service
+```
+
+## Database Access
 
 Connect to MySQL:
 ```bash
@@ -106,57 +259,9 @@ docker-compose exec mysql mysql -u root -proot order_simulator
 mysql -h localhost -P 3306 -u root -p root order_simulator
 ```
 
-### Stopping the Application
-
-```bash
-# Stop all services
-docker-compose down
-
-# Stop and remove volumes (WARNING: This will delete all data)
-docker-compose down -v
-```
-
-## Development
-
-### Local Development Setup
-
-1. **Start infrastructure only**:
-   ```bash
-   docker-compose up -d mysql kafka zookeeper kafka-ui
-   ```
-
-2. **Run services locally**:
-   ```bash
-   # Terminal 1 - ETL Service
-   ./gradlew :etl:bootRun
-
-   # Terminal 2 - Handler Service
-   ./gradlew :handler:bootRun
-   ```
-
-### Building Locally
-
-```bash
-# Build all modules
-./gradlew build
-
-# Build specific module
-./gradlew :common:build
-./gradlew :handler:build
-./gradlew :etl:build
-```
-
-### Running Tests
-
-```bash
-# Run all tests
-./gradlew test
-
-# Run tests for specific module
-./gradlew :common:test
-./gradlew :handler:test
-./gradlew :etl:test
-```
+### Database Tables
+- **orders**: Order data (symbol, quantity, price, status, side)
+- **events**: Event history (order_id, event_type, event_data, created_at)
 
 ## Project Structure
 
@@ -166,25 +271,27 @@ order-simulator/
 │   ├── src/main/java/
 │   │   └── com/example/common/
 │   │       ├── dto/        # Shared Data Transfer Objects
-│   │       ├── enums/      # Shared Enumerations
+│   │       ├── enums/      # Shared Enumerations (OrderStatus, EventType, OrderSide)
 │   │       ├── exception/  # Shared Custom Exceptions
-│   │       └── constant/   # Shared Constants
+│   │       └── constant/   # Shared Constants (Kafka topics)
 │   └── build.gradle
 ├── handler/                # REST API Service
 │   ├── src/main/java/
 │   │   └── com/example/handler/
-│   │       ├── controller/ # REST Controllers
-│   │       ├── service/    # Business Logic
-│   │       ├── repository/ # Data Access
-│   │       └── model/      # JPA Entities (Order)
+│   │       ├── controller/ # REST Controllers (Order, Auth, Global Exception Handler)
+│   │       ├── service/    # Business Logic (Order, Event Publisher)
+│   │       ├── repository/ # Data Access (Order Repository)
+│   │       ├── model/      # JPA Entities and DTOs
+│   │       └── config/     # Security and Kafka Configuration
 │   ├── build.gradle
 │   └── Dockerfile
 ├── etl/                    # Event Consumer Service
 │   ├── src/main/java/
 │   │   └── com/example/etl/
-│   │       ├── service/    # Kafka Consumers
-│   │       ├── repository/ # Data Access
-│   │       └── model/      # JPA Entities (Event)
+│   │       ├── service/    # Kafka Consumers (Event, DLQ)
+│   │       ├── repository/ # Data Access (Event Repository)
+│   │       ├── model/      # JPA Entities
+│   │       └── config/     # Kafka Configuration with DLQ support
 │   ├── build.gradle
 │   └── Dockerfile
 ├── docker-compose.yml      # Docker Compose configuration
@@ -192,34 +299,24 @@ order-simulator/
 └── build.gradle           # Root build configuration
 ```
 
-## Event Flow
-
-1. **Order Creation**: Handler receives REST request → Creates order → Publishes `ORDER_CREATED` event
-2. **Order Update**: Handler updates order → Publishes `ORDER_UPDATED` event
-3. **Order Cancellation**: Handler cancels order → Publishes `ORDER_CANCELLED` event
-4. **Order Execution**: Handler executes order → Publishes `ORDER_EXECUTED` event
-5. **Event Processing**: ETL consumes events → Stores event history in database
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Services not starting**: Check if ports are available and Docker has enough memory
-2. **Database connection issues**: Ensure MySQL is fully started before services
-3. **Kafka connection issues**: Ensure Kafka and Zookeeper are running
-
-### Useful Commands
+## Stopping the Application
 
 ```bash
-# Restart specific service
-docker-compose restart handler-service
+# Stop all services
+docker-compose down
 
-# View service logs
-docker-compose logs -f etl-service
+# Stop and remove volumes (WARNING: This will delete all data)
+docker-compose down -v
+```
 
-# Execute command in container
-docker-compose exec mysql bash
+## Building from Source
 
-# Check Kafka topics
-docker-compose exec kafka kafka-topics --list --bootstrap-server localhost:9092
+```bash
+# Build all modules
+./gradlew build
+
+# Build specific module
+./gradlew :common:build
+./gradlew :handler:build
+./gradlew :etl:build
 ```
